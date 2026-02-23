@@ -1,0 +1,166 @@
+#!/bin/bash
+set -e
+
+SRC_DIR="$HOME/p/claudecode"
+
+usage() {
+  echo "Usage: ccode <command> [args]"
+  echo ""
+  echo "Commands:"
+  echo "  start [project-dir]   Start Claude Code for a project (default: cwd)"
+  echo "  list                  List all Claude Code instances"
+  echo "  clean [project-dir]   Remove colima and docker instance for a project (default: cwd)"
+  echo "  clean-image [project-dir]  Remove the claude-code docker image for a project (default: cwd)"
+  exit 1
+}
+
+cmd_start() {
+  PROJECT_DIR="${1:-$(pwd)}"
+  PROJECT_DIR="$(realpath "$PROJECT_DIR")"
+
+  # Translate macOS path to Linux path for container
+  CONTAINER_DIR=$(echo "$PROJECT_DIR" | sed "s|^$HOME/|/home/|")
+
+  PROFILE="cc-$(echo "$PROJECT_DIR" | sed 's|^/||; s|[/ ]|-|g')"
+
+  echo "Project:  $PROJECT_DIR"
+  echo "Profile:  $PROFILE"
+
+  # Get API key from macOS keychain
+  ANTHROPIC_API_KEY=$(security find-generic-password -s "anthropic-api-key" -w) \
+    || { echo "API key not found in keychain. Add it with:"; \
+         echo "  security add-generic-password -s anthropic-api-key -a \$USER -w"; \
+         exit 1; }
+
+  # Start Colima profile if not already running
+  if ! colima status "$PROFILE" &>/dev/null; then
+    echo "Starting Colima profile '$PROFILE'..."
+    colima start "$PROFILE" \
+      --cpu 1 \
+      --memory 1 \
+      --disk 20 \
+      --mount "$PROJECT_DIR":w \
+      --mount "$SRC_DIR/var":w \
+      --mount-type virtiofs
+
+    # Wait for Docker daemon to be ready
+    echo "Waiting for Docker daemon..."
+    for i in {1..30}; do
+      if docker --context "colima-$PROFILE" info &>/dev/null; then
+        break
+      fi
+      sleep 1
+    done
+  else
+    echo "Colima profile '$PROFILE' already running."
+  fi
+
+  # Build image if not already built in this profile
+  if ! docker --context "colima-$PROFILE" images -q claude-code | grep -q .; then
+    echo "Building claude-code image..."
+    docker --context "colima-$PROFILE" build -t claude-code "$SRC_DIR"
+  else
+    echo "Image already exists, skipping build."
+  fi
+
+  # Check for existing running container
+  EXISTING=$(docker --context "colima-$PROFILE" ps -q --filter ancestor=claude-code 2>/dev/null || true)
+  if [ -n "$EXISTING" ]; then
+    echo "Attaching to existing container..."
+    docker --context "colima-$PROFILE" exec -it "$EXISTING" claude
+  else
+    echo "Starting new container..."
+    docker --context "colima-$PROFILE" run -it \
+      -v "$PROJECT_DIR":"$CONTAINER_DIR" \
+      -v "$SRC_DIR/var/.claude.json":/home/claude/.claude.json \
+      -v "$SRC_DIR/var/.claude":/home/claude/.claude \
+      -e API_KEY="$ANTHROPIC_API_KEY" \
+      -w "$CONTAINER_DIR" \
+      claude-code
+  fi
+}
+
+cmd_list() {
+  colima list 2>/dev/null | awk '
+    NR == 1 { print; next }
+    /^cc-/ {
+      profile = $1
+      # Reverse the profile name to a path: strip "cc-" prefix, replace dashes with slashes
+      path = profile
+      sub(/^cc-/, "", path)
+      gsub(/-/, "/", path)
+      path = "/" path
+      $1 = profile
+      printf "%-40s %-30s %s %s %s\n", profile, path, $2, $3, $4
+    }
+  '
+}
+
+cmd_clean() {
+  PROJECT_DIR="${1:-$(pwd)}"
+  PROJECT_DIR="$(realpath "$PROJECT_DIR")"
+
+  PROFILE="cc-$(echo "$PROJECT_DIR" | sed 's|^/||; s|[/ ]|-|g')"
+
+  echo "Project:  $PROJECT_DIR"
+  echo "Profile:  $PROFILE"
+
+  # Check if colima profile exists
+  if ! colima list 2>/dev/null | grep -q "^$PROFILE "; then
+    echo "No colima instance found for profile '$PROFILE'."
+  fi
+
+  # Remove all docker containers in this profile
+  CONTAINERS=$(docker --context "colima-$PROFILE" ps -aq 2>/dev/null || true)
+  if [ -n "$CONTAINERS" ]; then
+    echo "Removing docker containers..."
+    docker --context "colima-$PROFILE" rm -f $CONTAINERS
+  fi
+
+  # Remove all docker images in this profile
+  IMAGES=$(docker --context "colima-$PROFILE" images -q 2>/dev/null || true)
+  if [ -n "$IMAGES" ]; then
+    echo "Removing docker images..."
+    docker --context "colima-$PROFILE" rmi -f $IMAGES
+  fi
+
+  # Stop and delete colima profile
+  echo "Stopping and deleting colima profile '$PROFILE'..."
+  colima stop "$PROFILE" 2>/dev/null || true
+  colima delete "$PROFILE" -f
+
+  echo "Cleaned up profile '$PROFILE'."
+}
+
+cmd_clean_image() {
+  PROJECT_DIR="${1:-$(pwd)}"
+  PROJECT_DIR="$(realpath "$PROJECT_DIR")"
+
+  PROFILE="cc-$(echo "$PROJECT_DIR" | sed 's|^/||; s|[/ ]|-|g')"
+
+  echo "Project:  $PROJECT_DIR"
+  echo "Profile:  $PROFILE"
+
+  # Check if colima profile is running
+  if ! colima status "$PROFILE" &>/dev/null; then
+    echo "Colima profile '$PROFILE' is not running."
+  fi
+
+  # Remove the claude-code image
+  if docker --context "colima-$PROFILE" images -q claude-code | grep -q .; then
+    echo "Removing claude-code image..."
+    docker --context "colima-$PROFILE" rmi -f claude-code
+    echo "Image removed."
+  else
+    echo "No claude-code image found."
+  fi
+}
+
+# Main
+case "${1:-}" in
+  start) shift; cmd_start "$@" ;;
+  list)  cmd_list ;;
+  clean) shift; cmd_clean "$@" ;;
+  clean-image) shift; cmd_clean_image "$@" ;;
+  *)     usage ;;
+esac
