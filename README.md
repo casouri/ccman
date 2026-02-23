@@ -1,6 +1,13 @@
 # ccman
 
+Note: this whole thing is vide coded and unchecked, don’t use it.
+
 A CLI tool to run Claude Code in isolated Docker containers via Colima, one VM per project.
+
+## Setup
+
+- Copy configs into `var/.claude.json` and `var/.claude/settings.json`.
+- Fix the `SRC_DIR` in `ccman`.
 
 ## Files
 
