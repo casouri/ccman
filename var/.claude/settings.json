@@ -1,8 +1,9 @@
 {
+  "apiKeyHelper": "printenv API_KEY",
   "enabledPlugins": {
     "rust-analyzer-lsp@claude-plugins-official": true,
     "typescript-lsp@claude-plugins-official": true
   },
-  "skipDangerousModePermissionPrompt": true,
-  "theme": "light"
+  "spinnerTipsEnabled": false,
+  "prefersReducedMotion": true
 }
