@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-SRC_DIR="$HOME/p/claudecode"
+SRC_DIR="$HOME/p/ccman"
 
 usage() {
   echo "Usage: ccode <command> [args]"
@@ -56,6 +56,8 @@ cmd_run() {
   if ! colima status "$PROFILE" &>/dev/null; then
     echo "Starting Colima profile '$PROFILE'..."
     colima start "$PROFILE" \
+      # Don’t set docker’s global context.
+      --activate=false \
       --cpu 1 \
       --memory 1 \
       --disk 20 \
